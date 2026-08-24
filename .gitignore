@@ -1,3 +1,7 @@
+lib/
+node_modules/
+*.tgz
+
 # Logs
 logs
 *.log
