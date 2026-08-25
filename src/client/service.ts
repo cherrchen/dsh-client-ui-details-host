@@ -1,6 +1,6 @@
 /**
- * ShellDetailsService (`ctx.shellDetails`): dynamic `details` takeover,
- * one active surface instance, descriptors, and layout open/close.
+ * ShellDetailsService (`ctx.shellDetails`): per-session details navigation,
+ * takeover, descriptors, and layout open/close.
  */
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
@@ -26,7 +26,9 @@ import {
 } from './contract.ts'
 import {
   DetailsDescriptorRegistry,
+  notifyActivated,
   notifyClosed,
+  notifyDeactivated,
   notifyOpened,
 } from './descriptor.ts'
 import {
@@ -35,11 +37,26 @@ import {
   DetailsTakeoverConflictError,
 } from './errors.ts'
 import { createSurfaceInstance } from './instance.ts'
+import {
+  canGoBack as sessionCanGoBack,
+  findDedupedInstance,
+  popHistory,
+  pruneSurfaceId,
+  pushToHistory,
+  resolveDedupeKey,
+  withUpdatedPayload,
+} from './navigation.ts'
+import { DetailsSessionStore } from './session-state.ts'
 import { DetailsHost } from './DetailsHost.tsx'
 
 /** Mutable snapshot source for DetailsHost inject and public subscribe. */
 class DetailsHostStateSource implements HostObservable<DetailsHostState> {
-  #snapshot: DetailsHostState = { activeId: null, activeInstance: null, label: null }
+  #snapshot: DetailsHostState = {
+    activeId: null,
+    activeInstance: null,
+    label: null,
+    canGoBack: false,
+  }
   readonly #listeners = new Set<() => void>()
 
   /**
@@ -60,7 +77,7 @@ class DetailsHostStateSource implements HostObservable<DetailsHostState> {
   }
 
   /**
-   * Replace the snapshot when the active instance identity or label changes.
+   * Replace the snapshot when published fields change.
    * @param snapshot - next published state.
    */
   set(snapshot: DetailsHostState): void {
@@ -68,6 +85,7 @@ class DetailsHostStateSource implements HostObservable<DetailsHostState> {
     if (
       snapshot.activeId === prev.activeId
       && snapshot.label === prev.label
+      && snapshot.canGoBack === prev.canGoBack
       && snapshot.activeInstance?.instanceId === prev.activeInstance?.instanceId
       && snapshot.activeInstance?.payload === prev.activeInstance?.payload
     ) {
@@ -88,17 +106,6 @@ function isOpenRequest(value: string | ShellDetailsOpenRequest): value is ShellD
   return typeof value === 'object' && value !== null && 'surfaceId' in value
 }
 
-function toPublicSnapshot(state: DetailsHostState): ShellDetailsSnapshot {
-  return {
-    open: state.activeInstance !== null,
-    activeId: state.activeId,
-    activeInstance: state.activeInstance,
-    label: state.label,
-    canGoBack: false,
-    historyDepth: 0,
-  }
-}
-
 /** `ctx.shellDetails` implementation. */
 export class ShellDetailsService extends Service implements ShellDetailsController {
   static inject = ['slots', 'layout', 'sessions']
@@ -109,7 +116,9 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
   private readonly owner: Context
   private readonly state = new DetailsHostStateSource()
   private readonly descriptors = new DetailsDescriptorRegistry()
+  private readonly sessions = new DetailsSessionStore()
   private takeover: (() => void) | undefined
+  private knownSessionIds = new Set<string>()
 
   /**
    * @param ctx - owning plugin fiber. Takeover registrations ride this fiber
@@ -118,24 +127,34 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
   constructor(ctx: Context) {
     super(ctx, 'shellDetails')
     this.owner = ctx
+    this.knownSessionIds = this.readSessionIds()
     ctx.effect(() => () => {
-      this.closeWithReason('host-unload')
+      this.disposeAllSessions('host-unload')
       this.descriptors.clear()
+      this.sessions.clear()
     }, 'shellDetails: unload')
     ctx.effect(() => {
       const sessions = ctx.sessions
       let current = sessions.list.getSnapshot().current
       return sessions.list.subscribe(() => {
-        const next = sessions.list.getSnapshot().current
+        const snapshot = sessions.list.getSnapshot()
+        this.purgeDeletedSessions(snapshot.ids.map(String))
+        const next = snapshot.current
         if (next === current) return
+        const previous = current
         current = next
-        this.closeWithReason('session-close')
+        this.onSessionSwitch(
+          previous === undefined ? undefined : String(previous),
+          next === undefined ? undefined : String(next),
+        )
       })
-    }, 'shellDetails: session switch')
+    }, 'shellDetails: session list')
     ctx.effect(() => ctx.slots.subscribe(DETAILS_SURFACE_SLOT, () => { this.onSurfacesChanged() }), 'shellDetails: surface ledger')
     ctx.effect(() => ctx.slots.onEntryError((key, entry) => {
       if (key !== DETAILS_SURFACE_SLOT) return
-      if (entry.options.id === this.activeId) this.closeWithReason('surface-crash')
+      const surfaceId = entry.options.id
+      if (surfaceId === undefined) return
+      this.recoverAfterSurfaceLoss(surfaceId, 'surface-crash')
     }), 'shellDetails: surface crash')
   }
 
@@ -158,7 +177,17 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
    * @returns current shell details state.
    */
   getSnapshot(): ShellDetailsSnapshot {
-    return toPublicSnapshot(this.state.getSnapshot())
+    const published = this.state.getSnapshot()
+    const session = this.sessions.get(this.currentSessionId())
+    const historyDepth = session?.backStack.length ?? 0
+    return {
+      open: published.activeInstance !== null,
+      activeId: published.activeId,
+      activeInstance: published.activeInstance,
+      label: published.label,
+      canGoBack: published.canGoBack,
+      historyDepth,
+    }
   }
 
   /**
@@ -172,7 +201,7 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
 
   /**
    * Register optional behavior metadata for a surface id.
-   * @param descriptor - lifecycle and future dedupe metadata.
+   * @param descriptor - lifecycle and dedupe metadata.
    * @returns disposer that removes the descriptor.
    */
   registerSurface<P = unknown>(descriptor: DetailsSurfaceDescriptor<P>): () => void {
@@ -185,9 +214,9 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
    */
   open(id: string): void
   /**
-   * Occupy `details` with DetailsHost, create an instance from `request`,
-   * and open the column.
-   * @param request - surface id plus optional payload.
+   * Occupy `details` with DetailsHost, create or reuse an instance from
+   * `request`, and open the column.
+   * @param request - surface id, optional payload, and navigation mode.
    * @returns the committed active instance.
    */
   open<P = unknown>(request: ShellDetailsOpenRequest<P>): DetailsSurfaceInstance<P>
@@ -196,10 +225,11 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
       ? idOrRequest
       : { surfaceId: idOrRequest }
     const returnInstance = isOpenRequest(idOrRequest)
+    const navigation = request.navigation ?? 'push'
+    const sessionId = this.currentSessionId()
+    const session = this.sessions.getOrCreate(sessionId)
     const acquiredTakeover = this.takeover === undefined
 
-    // `shell.details.surface` contributions materialize through slots.inject
-    // only after DetailsHost declares the slot, so takeover precedes lookup.
     if (acquiredTakeover) {
       try {
         this.takeover = this.registerTakeover()
@@ -220,17 +250,35 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
     try {
       const entry = this.requireUniqueSurface(request.surfaceId)
       const label = resolveLabel(entry.options.label, request.surfaceId)
-      const candidate = createSurfaceInstance(
-        request.surfaceId,
-        request.payload as unknown,
-        label,
-        this.currentSessionId(),
-      )
-      const previous = this.activeInstance
-      if (previous !== null) {
-        notifyClosed(this.descriptors, previous, 'replace')
+      const payload = request.payload as unknown
+      const descriptor = this.descriptors.get(request.surfaceId)
+      const dedupeKey = resolveDedupeKey(descriptor, payload)
+
+      if (dedupeKey !== undefined && descriptor !== undefined) {
+        const match = findDedupedInstance(session, request.surfaceId, dedupeKey, descriptor)
+        if (match !== undefined) {
+          const updated = withUpdatedPayload(match.instance, payload, label)
+          if (match.where === 'active') {
+            session.active = updated
+            this.publishSession(session)
+            notifyActivated(this.descriptors, updated)
+            this.owner.layout.openDetails()
+            return returnInstance ? updated : undefined
+          }
+          session.backStack.splice(match.index, 1)
+          this.leaveActive(session, navigation)
+          session.active = updated
+          this.publishSession(session)
+          notifyActivated(this.descriptors, updated)
+          this.owner.layout.openDetails()
+          return returnInstance ? updated : undefined
+        }
       }
-      this.commitInstance(candidate)
+
+      const candidate = createSurfaceInstance(request.surfaceId, payload, label, sessionId)
+      this.leaveActive(session, navigation)
+      session.active = candidate
+      this.publishSession(session)
       notifyOpened(this.descriptors, candidate)
       this.owner.layout.openDetails()
       return returnInstance ? candidate : undefined
@@ -241,10 +289,43 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
   }
 
   /**
-   * Close the details column, clear the active instance, and dispose takeover.
+   * Close the details column and clear the current session's navigation.
    */
   close(): void {
-    this.closeWithReason('user')
+    this.clearCurrentSession('user')
+  }
+
+  /**
+   * Restore the previous instance from the current session back stack.
+   */
+  back(): void {
+    const sessionId = this.currentSessionId()
+    const session = this.sessions.get(sessionId)
+    if (session === undefined || session.backStack.length === 0) return
+    const leaving = session.active
+    if (leaving !== null) {
+      notifyClosed(this.descriptors, leaving, 'user')
+    }
+    const restored = popHistory(session)
+    session.active = restored ?? null
+    if (restored === undefined) {
+      this.publishSession(session)
+      this.releaseTakeover()
+      return
+    }
+    this.ensureTakeover()
+    this.publishSession(session)
+    notifyActivated(this.descriptors, restored)
+    this.owner.layout.openDetails()
+  }
+
+  /**
+   * Whether the current session has a non-empty back stack.
+   * @returns true when {@link back} would restore an instance.
+   */
+  canGoBack(): boolean {
+    const session = this.sessions.get(this.currentSessionId())
+    return session !== undefined && sessionCanGoBack(session)
   }
 
   /**
@@ -266,12 +347,170 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
     return this.activeId === id
   }
 
-  private closeWithReason(reason: DetailsSurfaceCloseReason): void {
-    if (this.takeover === undefined && this.activeInstance === null) return
-    const leaving = this.activeInstance
-    if (leaving !== null) {
-      notifyClosed(this.descriptors, leaving, reason)
+  private leaveActive(
+    session: ReturnType<DetailsSessionStore['getOrCreate']>,
+    navigation: 'push' | 'replace',
+  ): void {
+    const previous = session.active
+    if (previous === null) return
+    if (navigation === 'replace') {
+      notifyClosed(this.descriptors, previous, 'replace')
+      session.active = null
+      return
     }
+    notifyDeactivated(this.descriptors, previous)
+    const evicted = pushToHistory(session, previous)
+    session.active = null
+    for (const dropped of evicted) {
+      notifyClosed(this.descriptors, dropped, 'history-evicted', { deactivate: false })
+    }
+  }
+
+  private clearCurrentSession(reason: DetailsSurfaceCloseReason): void {
+    const sessionId = this.currentSessionId()
+    const session = this.sessions.get(sessionId)
+    if (
+      this.takeover === undefined
+      && this.activeInstance === null
+      && (session === undefined || (session.active === null && session.backStack.length === 0))
+    ) {
+      return
+    }
+    if (session !== undefined) {
+      if (session.active !== null) {
+        notifyClosed(this.descriptors, session.active, reason)
+      }
+      for (const entry of session.backStack) {
+        notifyClosed(this.descriptors, entry, reason, { deactivate: false })
+      }
+      session.active = null
+      session.backStack = []
+    }
+    this.publishIdle()
+    this.releaseTakeover()
+  }
+
+  private onSessionSwitch(previous: string | undefined, next: string | undefined): void {
+    if (previous !== undefined) {
+      const prior = this.sessions.get(previous)
+      if (prior?.active !== null && prior !== undefined) {
+        notifyDeactivated(this.descriptors, prior.active)
+      }
+    }
+    if (next === undefined) {
+      this.publishIdle()
+      this.releaseTakeover()
+      return
+    }
+    const session = this.sessions.get(next)
+    if (session?.active == null) {
+      this.publishIdle()
+      this.releaseTakeover()
+      return
+    }
+    this.ensureTakeover()
+    this.publishSession(session)
+    notifyActivated(this.descriptors, session.active)
+    this.owner.layout.openDetails()
+  }
+
+  private purgeDeletedSessions(liveIds: readonly string[]): void {
+    const live = new Set(liveIds)
+    for (const sessionId of [...this.sessions.keys()]) {
+      if (live.has(sessionId)) continue
+      const state = this.sessions.get(sessionId)
+      if (state !== undefined) {
+        if (state.active !== null) {
+          notifyClosed(this.descriptors, state.active, 'session-close')
+        }
+        for (const entry of state.backStack) {
+          notifyClosed(this.descriptors, entry, 'session-close', { deactivate: false })
+        }
+      }
+      this.sessions.delete(sessionId)
+    }
+    this.knownSessionIds = live
+  }
+
+  private recoverAfterSurfaceLoss(
+    surfaceId: string,
+    reason: Extract<DetailsSurfaceCloseReason, 'surface-unload' | 'surface-crash'>,
+  ): void {
+    const sessionId = this.currentSessionId()
+    const session = this.sessions.get(sessionId)
+    if (session === undefined) return
+    const previousActiveId = this.activeInstance?.instanceId
+    const removed = pruneSurfaceId(session, surfaceId)
+    for (const instance of removed) {
+      notifyClosed(this.descriptors, instance, reason, {
+        deactivate: instance.instanceId === previousActiveId,
+      })
+    }
+    if (session.active !== null) {
+      this.publishSession(session)
+      return
+    }
+    while (session.backStack.length > 0) {
+      const candidate = popHistory(session)!
+      if (!this.surfacePresent(candidate.surfaceId)) {
+        notifyClosed(this.descriptors, candidate, reason, { deactivate: false })
+        continue
+      }
+      session.active = candidate
+      this.ensureTakeover()
+      this.publishSession(session)
+      notifyActivated(this.descriptors, candidate)
+      this.owner.layout.openDetails()
+      return
+    }
+    this.publishSession(session)
+    this.releaseTakeover()
+  }
+
+  private disposeAllSessions(reason: DetailsSurfaceCloseReason): void {
+    for (const sessionId of [...this.sessions.keys()]) {
+      const session = this.sessions.get(sessionId)
+      if (session === undefined) continue
+      if (session.active !== null) {
+        notifyClosed(this.descriptors, session.active, reason)
+      }
+      for (const entry of session.backStack) {
+        notifyClosed(this.descriptors, entry, reason, { deactivate: false })
+      }
+    }
+    this.publishIdle()
+    this.releaseTakeover()
+  }
+
+  private onSurfacesChanged(): void {
+    const session = this.sessions.get(this.currentSessionId())
+    if (session === undefined) return
+    const missing = new Set<string>()
+    if (session.active !== null && !this.surfacePresent(session.active.surfaceId)) {
+      missing.add(session.active.surfaceId)
+    }
+    for (const entry of session.backStack) {
+      if (!this.surfacePresent(entry.surfaceId)) missing.add(entry.surfaceId)
+    }
+    for (const surfaceId of missing) {
+      this.recoverAfterSurfaceLoss(surfaceId, 'surface-unload')
+    }
+  }
+
+  private surfacePresent(surfaceId: string): boolean {
+    return this.owner.slots.entries(DETAILS_SURFACE_SLOT).some(entry => entry.options.id === surfaceId)
+  }
+
+  private ensureTakeover(): void {
+    if (this.takeover !== undefined) {
+      this.assertTakeoverWinner()
+      return
+    }
+    this.takeover = this.registerTakeover()
+    this.assertTakeoverWinner()
+  }
+
+  private releaseTakeover(): void {
     try {
       this.owner.layout.closeDetails()
     } catch (error) {
@@ -281,7 +520,6 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
         throw error
       }
     }
-    this.clearState()
     const dispose = this.takeover
     this.takeover = undefined
     dispose?.()
@@ -290,7 +528,6 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
   private registerTakeover(): () => void {
     return this.owner.slots.register({
       name: 'details',
-      // Single-cell slot: identity rides `registrant`, not list `id`.
       registrant: DETAILS_HOST_ENTRY_ID,
       priority: DETAILS_HOST_PRIORITY,
       children: {
@@ -300,6 +537,7 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
       inject: (): DetailsHostInjected => ({
         hooks: { detailsHost: this.state },
         close: () => { this.close() },
+        back: () => { this.back() },
       }),
     }, DetailsHost)
   }
@@ -311,16 +549,23 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
     }
   }
 
-  private commitInstance(instance: DetailsSurfaceInstance): void {
+  private publishSession(session: { active: DetailsSurfaceInstance | null; backStack: DetailsSurfaceInstance[] }): void {
+    const active = session.active
     this.state.set({
-      activeId: instance.surfaceId,
-      activeInstance: instance,
-      label: instance.label,
+      activeId: active?.surfaceId ?? null,
+      activeInstance: active,
+      label: active?.label ?? null,
+      canGoBack: session.backStack.length > 0,
     })
   }
 
-  private clearState(): void {
-    this.state.set({ activeId: null, activeInstance: null, label: null })
+  private publishIdle(): void {
+    this.state.set({
+      activeId: null,
+      activeInstance: null,
+      label: null,
+      canGoBack: false,
+    })
   }
 
   private requireUniqueSurface(id: string): StoredEntry {
@@ -340,17 +585,16 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
     return typeof current === 'string' && current.length > 0 ? current : ''
   }
 
+  private readSessionIds(): Set<string> {
+    const ids = this.owner.sessions.list.getSnapshot().ids
+    if (!Array.isArray(ids)) return new Set()
+    return new Set(ids.map(String))
+  }
+
   private rollbackTakeover(): void {
-    this.clearState()
+    this.publishIdle()
     const dispose = this.takeover
     this.takeover = undefined
     dispose?.()
-  }
-
-  private onSurfacesChanged(): void {
-    const activeId = this.activeId
-    if (activeId === null) return
-    const present = this.owner.slots.entries(DETAILS_SURFACE_SLOT).some(entry => entry.options.id === activeId)
-    if (!present) this.closeWithReason('surface-unload')
   }
 }

@@ -26,6 +26,8 @@
     "src/client/descriptor.ts",
     "src/client/errors.ts",
     "src/client/instance.ts",
+    "src/client/navigation.ts",
+    "src/client/session-state.ts",
     "src/client/service.ts",
     "src/client/DetailsHost.tsx"
   ]

@@ -57,7 +57,7 @@ export function invokeLifecycle(label: string, invoke: () => void): void {
 }
 
 /**
- * Run open then activate for a newly committed instance.
+ * Run open then activate for a newly created instance.
  * @param registry - descriptor registry.
  * @param instance - committed instance.
  */
@@ -72,27 +72,58 @@ export function notifyOpened(
       descriptor.onOpen!(instance)
     })
   }
-  if (descriptor.onActivate !== undefined) {
-    invokeLifecycle(`onActivate(${JSON.stringify(instance.surfaceId)})`, () => {
-      descriptor.onActivate!(instance)
-    })
-  }
+  notifyActivated(registry, instance)
+}
+
+/**
+ * Run activate only (dedupe reuse or history restore).
+ * @param registry - descriptor registry.
+ * @param instance - activated instance.
+ */
+export function notifyActivated(
+  registry: DetailsDescriptorRegistry,
+  instance: DetailsSurfaceInstance,
+): void {
+  const descriptor = registry.get(instance.surfaceId)
+  if (descriptor?.onActivate === undefined) return
+  invokeLifecycle(`onActivate(${JSON.stringify(instance.surfaceId)})`, () => {
+    descriptor.onActivate!(instance)
+  })
+}
+
+/**
+ * Run deactivate only (push into history or session switch away).
+ * @param registry - descriptor registry.
+ * @param instance - deactivated instance.
+ */
+export function notifyDeactivated(
+  registry: DetailsDescriptorRegistry,
+  instance: DetailsSurfaceInstance,
+): void {
+  const descriptor = registry.get(instance.surfaceId)
+  if (descriptor?.onDeactivate === undefined) return
+  invokeLifecycle(`onDeactivate(${JSON.stringify(instance.surfaceId)})`, () => {
+    descriptor.onDeactivate!(instance)
+  })
 }
 
 /**
  * Run deactivate then close for a leaving instance.
  * @param registry - descriptor registry.
- * @param instance - instance being deactivated.
+ * @param instance - instance being closed.
  * @param reason - close reason vocabulary entry.
+ * @param options - set `deactivate` false for inactive history entries.
  */
 export function notifyClosed(
   registry: DetailsDescriptorRegistry,
   instance: DetailsSurfaceInstance,
   reason: DetailsSurfaceCloseReason,
+  options: { deactivate?: boolean } = {},
 ): void {
+  const deactivate = options.deactivate !== false
   const descriptor = registry.get(instance.surfaceId)
   if (descriptor === undefined) return
-  if (descriptor.onDeactivate !== undefined) {
+  if (deactivate && descriptor.onDeactivate !== undefined) {
     invokeLifecycle(`onDeactivate(${JSON.stringify(instance.surfaceId)})`, () => {
       descriptor.onDeactivate!(instance)
     })

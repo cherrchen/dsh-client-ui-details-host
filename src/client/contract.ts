@@ -44,7 +44,7 @@ export type ShellDetailsFeature =
   | 'navigationHistory'
   | 'dedupe'
 
-/** Features enabled by the current Host implementation (through P1). */
+/** Features enabled by the current Host implementation (through P2). */
 export const SHELL_DETAILS_ENABLED_FEATURES: readonly ShellDetailsFeature[] = [
   'stateSubscription',
   'payloadRouting',
@@ -53,6 +53,9 @@ export const SHELL_DETAILS_ENABLED_FEATURES: readonly ShellDetailsFeature[] = [
   'surfaceDescriptors',
   'surfaceLifecycle',
   'headerActions',
+  'sessionRestore',
+  'navigationHistory',
+  'dedupe',
 ]
 
 /** Features enabled by the P0 Host subset (still exported for consumers). */
@@ -64,8 +67,7 @@ export const SHELL_DETAILS_P0_FEATURES: readonly ShellDetailsFeature[] = [
 ]
 
 /**
- * Why a surface instance left the active seat.
- * `history-evicted` is reserved for P2 navigation.
+ * Why a surface instance left the active seat or was dropped from history.
  */
 export type DetailsSurfaceCloseReason =
   | 'user'
@@ -84,7 +86,8 @@ export type DetailsSurfaceCloseReason =
 export interface DetailsSurfaceDescriptor<P = unknown> {
   readonly id: string
   /**
-   * Optional dedupe key factory. Stored in P1; navigation dedupe activates in P2.
+   * Optional dedupe key factory. Matching opens reuse `instanceId` and update
+   * payload instead of creating a new instance.
    * @param payload - open payload for this surface.
    * @returns a stable key, or undefined to skip dedupe.
    */
@@ -131,6 +134,11 @@ export interface DetailsSurfaceInstance<P = unknown> {
 export interface ShellDetailsOpenRequest<P = unknown> {
   surfaceId: string
   payload?: P
+  /**
+   * Navigation mode. Default `push` retains the previous active instance in
+   * the session back stack; `replace` closes it.
+   */
+  navigation?: 'push' | 'replace'
 }
 
 /** Owner props passed into details Host child slots via `renderSlot`. */
@@ -163,8 +171,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /**
- * Public reactive snapshot of shell details state.
- * Navigation fields stay inert until P2 (`canGoBack` false, `historyDepth` 0).
+ * Public reactive snapshot of shell details state for the current session.
  */
 export interface ShellDetailsSnapshot {
   readonly open: boolean
@@ -183,6 +190,8 @@ export interface DetailsHostState {
   readonly activeInstance: DetailsSurfaceInstance | null
   /** Resolved label of the active surface, or null while idle. */
   readonly label: string | null
+  /** Whether {@link ShellDetailsController.back} can restore history. */
+  readonly canGoBack: boolean
 }
 
 /** Injected business face of the DetailsHost `details` occupant. */
@@ -191,8 +200,10 @@ export interface DetailsHostInjected {
     /** Active surface snapshot bound by the renderer as `useDetailsHost`. */
     detailsHost: HostObservable<DetailsHostState>
   }
-  /** Close the details column and release takeover. */
+  /** Close the details column and clear the current session's navigation. */
   close(): void
+  /** Restore the previous instance from the current session back stack. */
+  back(): void
 }
 
 /**
@@ -218,10 +229,21 @@ export interface ShellDetailsController {
    */
   open<P = unknown>(request: ShellDetailsOpenRequest<P>): DetailsSurfaceInstance<P>
   /**
-   * Close the details column, clear the active instance, and dispose takeover.
-   * Idempotent while already closed. Public closes use reason `user`.
+   * Close the details column, clear the current session's navigation, and
+   * dispose takeover. Idempotent while already closed. Public closes use
+   * reason `user`.
    */
   close(): void
+  /**
+   * Restore the previous instance from the current session back stack.
+   * No-op when the stack is empty.
+   */
+  back(): void
+  /**
+   * Whether the current session has a non-empty back stack.
+   * @returns true when {@link back} would restore an instance.
+   */
+  canGoBack(): boolean
   /**
    * Open `id` when it is not active; close when it is.
    * @param id - registered `shell.details.surface` contribution id.

@@ -15,6 +15,7 @@ export {
   SHELL_DETAILS_ENABLED_FEATURES,
   SHELL_DETAILS_P0_FEATURES,
 } from './contract.ts'
+export { DETAILS_HISTORY_LIMIT } from './session-state.ts'
 export type {
   DetailsHostInjected,
   DetailsHostState,
@@ -27,6 +28,7 @@ export type {
   ShellDetailsOpenRequest,
   ShellDetailsSnapshot,
 } from './contract.ts'
+export type { DetailsSessionState } from './session-state.ts'
 export {
   DetailsSurfaceDuplicateError,
   DetailsSurfaceNotFoundError,
