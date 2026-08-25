@@ -60,7 +60,7 @@ describe('shellDetails descriptors and lifecycle', () => {
     b.shellDetails.open('test.alpha')
     expect(events).toEqual(['alpha:open', 'alpha:activate'])
 
-    b.shellDetails.open('test.beta')
+    b.shellDetails.open({ surfaceId: 'test.beta', navigation: 'replace' })
     expect(events).toEqual([
       'alpha:open',
       'alpha:activate',

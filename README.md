@@ -19,7 +19,7 @@ ctx.shellDetails.open({
 
 Open validates the surface, creates a surface instance, registers DetailsHost into the single `details` slot at a lower shadowing priority than the upstream occupant, verifies DetailsHost won the cell, commits the instance, and then calls `ctx.layout.openDetails()`. Missing or duplicate surface ids, and takeover conflicts, throw typed errors and roll back so the third column cannot render empty Host state. Switching to another registered id keeps DetailsHost mounted and does not close the column. `close()` is idempotent: it closes the column, clears the active instance, and disposes takeover so the upstream occupant returns.
 
-Public reactive state is available through `getSnapshot()` / `subscribe()` for `useSyncExternalStore`. Navigation fields stay inert until a later gate (`canGoBack` false, `historyDepth` 0). Capability negotiation uses `apiVersion` (2) and `features` (through P1: `stateSubscription`, `payloadRouting`, `surfaceInstances`, `conflictDetection`, `surfaceDescriptors`, `surfaceLifecycle`, `headerActions`).
+Public reactive state is available through `getSnapshot()` / `subscribe()` for `useSyncExternalStore`. Each session keeps an in-memory active instance and bounded back stack (default `push`, optional `replace`, with `back()` and dedupe). Capability negotiation uses `apiVersion` (2) and the full P2 `features` set.
 
 Plugins may register optional behavior metadata with `registerSurface()` without replacing the slot contribution. Lifecycle callbacks run for open/activate/deactivate/close; callback errors are logged and never block Host cleanup. Host header actions contribute to `shell.details.header.actions` and are filtered to the active surface id.
 
@@ -48,7 +48,7 @@ declare module '@dsh-electron/dsh-client-ui-details-host/client' {
 
 Unknown external surfaces and payloads remain supported without augmentation.
 
-This release keeps N registered surfaces and 0 or 1 active surface instance. It does not implement split panes, navigation history, session restore, dedupe activation, or persistence. Panel geometry stays with `ctx.layout`.
+This release keeps N registered surfaces and 0 or 1 active surface instance per session. It does not implement split panes or durable cross-restart persistence. Panel geometry stays with `ctx.layout`.
 
 Unloading the active surface, switching the current session, a surface render crash, or unloading Details Host all close takeover and restore the upstream occupant. After a later reload, `slots.inject()` rematerializes contributions against a new declaration lifetime.
 
@@ -75,5 +75,4 @@ None. The package does not add, replace, or retain model-request tokens.
 ## Known Limitations and Deferred Work
 
 - **Single active surface** — only one `shell.details.surface` instance renders at a time; split, stacked, or pinned details columns are not implemented.
-- **No navigation history** — snapshot fields `canGoBack` / `historyDepth` are fixed at false / 0 until P2.
-- **Descriptor dedupe is inert** — `dedupeKey` may be registered but is not applied until P2.
+- **Memory-only session state** — navigation history is cleared on process restart; there is no localStorage, IndexedDB, or file persistence.

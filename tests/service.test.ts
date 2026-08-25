@@ -33,7 +33,8 @@ describe('shellDetails service', () => {
     expect(b.shellDetails.isOpen()).toBe(false)
     expect(b.shellDetails.apiVersion).toBe(SHELL_DETAILS_API_VERSION)
     expect(b.shellDetails.features.has('payloadRouting')).toBe(true)
-    expect(b.shellDetails.features.has('navigationHistory')).toBe(false)
+    expect(b.shellDetails.features.has('navigationHistory')).toBe(true)
+    expect(b.shellDetails.features.has('dedupe')).toBe(true)
     expect(winner(b.slots)).toBe(UpstreamDetailsPanel)
     expect(b.layout.openDetails).not.toHaveBeenCalled()
     expect(b.shellDetails.getSnapshot()).toEqual({

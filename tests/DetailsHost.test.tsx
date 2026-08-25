@@ -25,7 +25,12 @@ function instance(overrides: Partial<DetailsSurfaceInstance> = {}): DetailsSurfa
   }
 }
 
-function props(state: DetailsHostState, close = vi.fn()): DetailsHostProps {
+function props(
+  state: DetailsHostState,
+  handlers: { close?: ReturnType<typeof vi.fn>; back?: ReturnType<typeof vi.fn> } = {},
+): DetailsHostProps {
+  const close = handlers.close ?? vi.fn()
+  const back = handlers.back ?? vi.fn()
   return {
     sessionId: 'session-a' as DetailsHostProps['sessionId'],
     useSession: unused,
@@ -56,23 +61,47 @@ function props(state: DetailsHostState, close = vi.fn()): DetailsHostProps {
     },
     useDetailsHost: selector => selector(state),
     close,
+    back,
   }
 }
 
 describe('DetailsHost', () => {
   it('renders nothing while idle', () => {
-    const view = render(<DetailsHost {...props({ activeId: null, activeInstance: null, label: null })} />)
+    const view = render(<DetailsHost {...props({
+      activeId: null,
+      activeInstance: null,
+      label: null,
+      canGoBack: false,
+    })} />)
     expect(view.container.querySelector('[data-details-host]')).toBeNull()
   })
 
-  it('renders header actions for the active surface and closes from the header', () => {
+  it('renders header actions and closes from the header', () => {
     const close = vi.fn()
     const active = instance()
-    render(<DetailsHost {...props({ activeId: active.surfaceId, activeInstance: active, label: 'Alpha' }, close)} />)
+    render(<DetailsHost {...props({
+      activeId: active.surfaceId,
+      activeInstance: active,
+      label: 'Alpha',
+      canGoBack: false,
+    }, { close })} />)
     expect(screen.getByRole('heading', { name: 'Alpha' })).toBeTruthy()
     expect(screen.getByTestId('surface-test.alpha')).toBeTruthy()
     expect(screen.getByTestId('action-test.alpha').getAttribute('data-instance-id')).toBe('details-instance-1')
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     expect(close).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders a back control when history is available', () => {
+    const back = vi.fn()
+    const active = instance()
+    render(<DetailsHost {...props({
+      activeId: active.surfaceId,
+      activeInstance: active,
+      label: 'Alpha',
+      canGoBack: true,
+    }, { back })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+    expect(back).toHaveBeenCalledTimes(1)
   })
 })
