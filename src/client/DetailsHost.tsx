@@ -19,8 +19,8 @@ export type DetailsHostProps =
  * @returns the hosted column, or null while no surface is active.
  */
 export function DetailsHost({ renderSlot, useDetailsHost, close }: DetailsHostProps) {
-  const { activeId, label } = useDetailsHost(state => state)
-  if (activeId === null) return null
+  const { activeId, activeInstance, label } = useDetailsHost(state => state)
+  if (activeId === null || activeInstance === null) return null
   return (
     <div className={css.root} data-details-host="">
       <div className={css.header}>
@@ -35,7 +35,11 @@ export function DetailsHost({ renderSlot, useDetailsHost, close }: DetailsHostPr
         </button>
       </div>
       <div className={css.body}>
-        {renderSlot(DETAILS_SURFACE_SLOT, {}, { only: activeId })}
+        {renderSlot(
+          DETAILS_SURFACE_SLOT,
+          { detailsInstance: activeInstance },
+          { only: activeInstance.surfaceId },
+        )}
       </div>
     </div>
   )

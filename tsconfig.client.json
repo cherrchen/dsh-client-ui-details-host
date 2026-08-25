@@ -23,6 +23,8 @@
     "src/client/css-modules.d.ts",
     "src/client/index.ts",
     "src/client/contract.ts",
+    "src/client/errors.ts",
+    "src/client/instance.ts",
     "src/client/service.ts",
     "src/client/DetailsHost.tsx"
   ]
