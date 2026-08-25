@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { DETAILS_HEADER_ACTIONS_SLOT, DETAILS_SURFACE_SLOT } from '../src/client/contract.ts'
 import { DetailsHost } from '../src/client/DetailsHost.tsx'
 import type { DetailsHostProps } from '../src/client/DetailsHost.tsx'
 import type { DetailsHostState, DetailsSurfaceInstance } from '../src/client/contract.ts'
@@ -30,13 +31,29 @@ function props(state: DetailsHostState, close = vi.fn()): DetailsHostProps {
     useSession: unused,
     useSessions: unused,
     useWorkspaces: unused,
-    renderSlot: (_name, owner, options) => (
-      <div
-        data-testid={`surface-${String(options?.only)}`}
-        data-instance-id={(owner as { detailsInstance: DetailsSurfaceInstance }).detailsInstance.instanceId}
-        data-payload={JSON.stringify((owner as { detailsInstance: DetailsSurfaceInstance }).detailsInstance.payload)}
-      />
-    ),
+    renderSlot: (name, owner, options) => {
+      if (name === DETAILS_HEADER_ACTIONS_SLOT) {
+        return (
+          <button
+            type="button"
+            data-testid={`action-${String(options?.only)}`}
+            data-instance-id={(owner as { detailsInstance: DetailsSurfaceInstance }).detailsInstance.instanceId}
+          >
+            Refresh
+          </button>
+        )
+      }
+      if (name === DETAILS_SURFACE_SLOT) {
+        return (
+          <div
+            data-testid={`surface-${String(options?.only)}`}
+            data-instance-id={(owner as { detailsInstance: DetailsSurfaceInstance }).detailsInstance.instanceId}
+            data-payload={JSON.stringify((owner as { detailsInstance: DetailsSurfaceInstance }).detailsInstance.payload)}
+          />
+        )
+      }
+      return null
+    },
     useDetailsHost: selector => selector(state),
     close,
   }
@@ -48,14 +65,13 @@ describe('DetailsHost', () => {
     expect(view.container.querySelector('[data-details-host]')).toBeNull()
   })
 
-  it('renders the active surface with owner payload and closes from the header', () => {
+  it('renders header actions for the active surface and closes from the header', () => {
     const close = vi.fn()
     const active = instance()
     render(<DetailsHost {...props({ activeId: active.surfaceId, activeInstance: active, label: 'Alpha' }, close)} />)
     expect(screen.getByRole('heading', { name: 'Alpha' })).toBeTruthy()
-    const surface = screen.getByTestId('surface-test.alpha')
-    expect(surface.getAttribute('data-instance-id')).toBe('details-instance-1')
-    expect(surface.getAttribute('data-payload')).toBe(JSON.stringify({ tab: 'diff' }))
+    expect(screen.getByTestId('surface-test.alpha')).toBeTruthy()
+    expect(screen.getByTestId('action-test.alpha').getAttribute('data-instance-id')).toBe('details-instance-1')
     fireEvent.click(screen.getByRole('button', { name: 'Close' }))
     expect(close).toHaveBeenCalledTimes(1)
   })

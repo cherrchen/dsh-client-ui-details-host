@@ -19,7 +19,9 @@ ctx.shellDetails.open({
 
 `open` 会先校验 surface，创建 surface instance，以低于上游占位者的 shadowing priority 把 DetailsHost 注册进单一 `details` slot，确认 DetailsHost 赢得该 cell，提交 instance，然后调用 `ctx.layout.openDetails()`。缺少或重复的 surface id，以及 takeover 冲突，都会抛出类型化错误并回滚，因此第三栏不会渲染空白 Host 状态。切换到另一个已注册 id 时 DetailsHost 保持 mounted，并且不会关闭该栏。`close()` 是幂等的：关闭该栏、清除活动 instance，并 dispose takeover，使上游占位者返回。
 
-公开响应式状态通过 `getSnapshot()` / `subscribe()` 提供，可供 `useSyncExternalStore` 使用。P0 中 `canGoBack` 为 false，`historyDepth` 为 0。能力协商使用 `apiVersion`（2）与 `features`（`stateSubscription`、`payloadRouting`、`surfaceInstances`、`conflictDetection`）。
+公开响应式状态通过 `getSnapshot()` / `subscribe()` 提供，可供 `useSyncExternalStore` 使用。导航相关字段在后续 Gate 之前保持惰性（`canGoBack` 为 false，`historyDepth` 为 0）。能力协商使用 `apiVersion`（2）与 `features`（至 P1：`stateSubscription`、`payloadRouting`、`surfaceInstances`、`conflictDetection`、`surfaceDescriptors`、`surfaceLifecycle`、`headerActions`）。
+
+插件可通过 `registerSurface()` 注册可选行为元数据，而无需替换 slot 贡献。生命周期回调覆盖 open/activate/deactivate/close；回调抛错只记日志，不会阻止 Host cleanup。Host header actions 贡献到 `shell.details.header.actions`，并按活动 surface id 过滤。
 
 其他 Client 插件通过声明感知的 injection 贡献 surface。Host 通过 slot owner props 路由活动 instance：
 
@@ -46,7 +48,7 @@ declare module '@dsh-electron/dsh-client-ui-details-host/client' {
 
 未做 augmentation 的外部 surface 与未知 payload 仍然受支持。
 
-本版本保持 N 个已注册 surface 以及 0 或 1 个活动 surface instance。它不实现 split pane、导航历史、descriptor、header actions、session restore 或 persistence。面板几何仍由 `ctx.layout` 负责。
+本版本保持 N 个已注册 surface 以及 0 或 1 个活动 surface instance。它不实现 split pane、导航历史、session restore、dedupe 生效或 persistence。面板几何仍由 `ctx.layout` 负责。
 
 卸载活动 surface、切换当前 session、surface 渲染崩溃或卸载 Details Host，都会关闭 takeover 并恢复上游占位者。之后重新加载时，`slots.inject()` 会针对新的声明生命周期重新 materialize 贡献。
 
@@ -73,5 +75,5 @@ pnpm pack --dry-run
 ## Known Limitations and Deferred Work
 
 - **单一活动 surface** — 同一时间只渲染一个 `shell.details.surface` instance；不实现 split、stacked 或 pinned 详情栏。
-- **无导航历史** — P0 快照字段 `canGoBack` / `historyDepth` 固定为 false / 0，留待后续 Gate。
-- **无 surface descriptor 或 header actions** — 生命周期元数据与 Host chrome actions 在 P1 提供。
+- **无导航历史** — 快照字段 `canGoBack` / `historyDepth` 固定为 false / 0，留待 P2。
+- **Descriptor dedupe 尚未生效** — 可以注册 `dedupeKey`，但要到 P2 才会应用。
