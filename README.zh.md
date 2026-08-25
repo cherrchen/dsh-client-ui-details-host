@@ -33,7 +33,7 @@ ctx.slots.inject('shell.details.surface', () =>
     label: 'Example Alpha',
   }, ExampleSurface))
 
-// ExampleSurface 的 props 通过 PropsRuntime<'shell.details.surface'> 包含 detailsInstance
+// ExampleSurface props include detailsInstance from PropsRuntime<'shell.details.surface'>
 ```
 
 可选的 payload 类型通过对 Client 入口做 declaration merging：
