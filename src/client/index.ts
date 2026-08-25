@@ -7,15 +7,19 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import { ShellDetailsService } from './service.ts'
 
 export {
+  DETAILS_HEADER_ACTIONS_SLOT,
   DETAILS_HOST_ENTRY_ID,
   DETAILS_HOST_PRIORITY,
   DETAILS_SURFACE_SLOT,
   SHELL_DETAILS_API_VERSION,
+  SHELL_DETAILS_ENABLED_FEATURES,
   SHELL_DETAILS_P0_FEATURES,
 } from './contract.ts'
 export type {
   DetailsHostInjected,
   DetailsHostState,
+  DetailsSurfaceCloseReason,
+  DetailsSurfaceDescriptor,
   DetailsSurfaceInstance,
   DetailsSurfaceOwnerProps,
   ShellDetailsController,

@@ -1,6 +1,6 @@
 /**
  * ShellDetailsService (`ctx.shellDetails`): dynamic `details` takeover,
- * one active surface instance, payload routing, and layout open/close.
+ * one active surface instance, descriptors, and layout open/close.
  */
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
@@ -8,19 +8,27 @@ import type {} from '@deepseek-ai/dsh-client-runtime/client'
 import type { HostObservable, SlotLabel, StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import {
+  DETAILS_HEADER_ACTIONS_SLOT,
   DETAILS_HOST_ENTRY_ID,
   DETAILS_HOST_PRIORITY,
   DETAILS_SURFACE_SLOT,
   SHELL_DETAILS_API_VERSION,
-  SHELL_DETAILS_P0_FEATURES,
+  SHELL_DETAILS_ENABLED_FEATURES,
   type DetailsHostInjected,
   type DetailsHostState,
+  type DetailsSurfaceCloseReason,
+  type DetailsSurfaceDescriptor,
   type DetailsSurfaceInstance,
   type ShellDetailsController,
   type ShellDetailsFeature,
   type ShellDetailsOpenRequest,
   type ShellDetailsSnapshot,
 } from './contract.ts'
+import {
+  DetailsDescriptorRegistry,
+  notifyClosed,
+  notifyOpened,
+} from './descriptor.ts'
 import {
   DetailsSurfaceDuplicateError,
   DetailsSurfaceNotFoundError,
@@ -96,10 +104,11 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
   static inject = ['slots', 'layout', 'sessions']
 
   readonly apiVersion = SHELL_DETAILS_API_VERSION
-  readonly features: ReadonlySet<ShellDetailsFeature> = new Set(SHELL_DETAILS_P0_FEATURES)
+  readonly features: ReadonlySet<ShellDetailsFeature> = new Set(SHELL_DETAILS_ENABLED_FEATURES)
 
   private readonly owner: Context
   private readonly state = new DetailsHostStateSource()
+  private readonly descriptors = new DetailsDescriptorRegistry()
   private takeover: (() => void) | undefined
 
   /**
@@ -109,7 +118,10 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
   constructor(ctx: Context) {
     super(ctx, 'shellDetails')
     this.owner = ctx
-    ctx.effect(() => () => { this.close() }, 'shellDetails: unload')
+    ctx.effect(() => () => {
+      this.closeWithReason('host-unload')
+      this.descriptors.clear()
+    }, 'shellDetails: unload')
     ctx.effect(() => {
       const sessions = ctx.sessions
       let current = sessions.list.getSnapshot().current
@@ -117,13 +129,13 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
         const next = sessions.list.getSnapshot().current
         if (next === current) return
         current = next
-        this.close()
+        this.closeWithReason('session-close')
       })
     }, 'shellDetails: session switch')
     ctx.effect(() => ctx.slots.subscribe(DETAILS_SURFACE_SLOT, () => { this.onSurfacesChanged() }), 'shellDetails: surface ledger')
     ctx.effect(() => ctx.slots.onEntryError((key, entry) => {
       if (key !== DETAILS_SURFACE_SLOT) return
-      if (entry.options.id === this.activeId) this.close()
+      if (entry.options.id === this.activeId) this.closeWithReason('surface-crash')
     }), 'shellDetails: surface crash')
   }
 
@@ -156,6 +168,15 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
    */
   subscribe(listener: () => void): () => void {
     return this.state.subscribe(listener)
+  }
+
+  /**
+   * Register optional behavior metadata for a surface id.
+   * @param descriptor - lifecycle and future dedupe metadata.
+   * @returns disposer that removes the descriptor.
+   */
+  registerSurface<P = unknown>(descriptor: DetailsSurfaceDescriptor<P>): () => void {
+    return this.descriptors.register(descriptor)
   }
 
   /**
@@ -205,7 +226,12 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
         label,
         this.currentSessionId(),
       )
+      const previous = this.activeInstance
+      if (previous !== null) {
+        notifyClosed(this.descriptors, previous, 'replace')
+      }
       this.commitInstance(candidate)
+      notifyOpened(this.descriptors, candidate)
       this.owner.layout.openDetails()
       return returnInstance ? candidate : undefined
     } catch (error) {
@@ -218,20 +244,7 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
    * Close the details column, clear the active instance, and dispose takeover.
    */
   close(): void {
-    if (this.takeover === undefined && this.activeInstance === null) return
-    try {
-      this.owner.layout.closeDetails()
-    } catch (error) {
-      if (error instanceof Error && /panel actions not wired/.test(error.message)) {
-        // Root entry already gone during plugin unload.
-      } else {
-        throw error
-      }
-    }
-    this.clearState()
-    const dispose = this.takeover
-    this.takeover = undefined
-    dispose?.()
+    this.closeWithReason('user')
   }
 
   /**
@@ -253,6 +266,27 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
     return this.activeId === id
   }
 
+  private closeWithReason(reason: DetailsSurfaceCloseReason): void {
+    if (this.takeover === undefined && this.activeInstance === null) return
+    const leaving = this.activeInstance
+    if (leaving !== null) {
+      notifyClosed(this.descriptors, leaving, reason)
+    }
+    try {
+      this.owner.layout.closeDetails()
+    } catch (error) {
+      if (error instanceof Error && /panel actions not wired/.test(error.message)) {
+        // Root entry already gone during plugin unload.
+      } else {
+        throw error
+      }
+    }
+    this.clearState()
+    const dispose = this.takeover
+    this.takeover = undefined
+    dispose?.()
+  }
+
   private registerTakeover(): () => void {
     return this.owner.slots.register({
       name: 'details',
@@ -261,6 +295,7 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
       priority: DETAILS_HOST_PRIORITY,
       children: {
         'shell.details.surface': { kind: 'list', scope: 'session' },
+        [DETAILS_HEADER_ACTIONS_SLOT]: { kind: 'list', scope: 'session' },
       },
       inject: (): DetailsHostInjected => ({
         hooks: { detailsHost: this.state },
@@ -316,6 +351,6 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
     const activeId = this.activeId
     if (activeId === null) return
     const present = this.owner.slots.entries(DETAILS_SURFACE_SLOT).some(entry => entry.options.id === activeId)
-    if (!present) this.close()
+    if (!present) this.closeWithReason('surface-unload')
   }
 }

@@ -27,6 +27,21 @@
   white-space: nowrap;
 }
 
+.headerTrailing {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
 .close {
   display: grid;
   flex: none;

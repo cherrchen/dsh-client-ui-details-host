@@ -1,11 +1,14 @@
 /**
- * Public Client contract for `ctx.shellDetails` and the `shell.details.surface`
- * list slot. Types and feature vocabulary only.
+ * Public Client contract for `ctx.shellDetails` and details Host slots.
+ * Types and feature vocabulary only.
  */
 import type { HostObservable } from '@deepseek-ai/dsh-client-ui-slots'
 
 /** Slot key declared by DetailsHost while it occupies `details`. */
 export const DETAILS_SURFACE_SLOT = 'shell.details.surface' as const
+
+/** Slot key for per-surface Host header action contributions. */
+export const DETAILS_HEADER_ACTIONS_SLOT = 'shell.details.header.actions' as const
 
 /**
  * Fixed registrant identity for the DetailsHost `details` takeover entry.
@@ -41,13 +44,73 @@ export type ShellDetailsFeature =
   | 'navigationHistory'
   | 'dedupe'
 
-/** Features enabled by the P0 Host implementation. */
+/** Features enabled by the current Host implementation (through P1). */
+export const SHELL_DETAILS_ENABLED_FEATURES: readonly ShellDetailsFeature[] = [
+  'stateSubscription',
+  'payloadRouting',
+  'surfaceInstances',
+  'conflictDetection',
+  'surfaceDescriptors',
+  'surfaceLifecycle',
+  'headerActions',
+]
+
+/** Features enabled by the P0 Host subset (still exported for consumers). */
 export const SHELL_DETAILS_P0_FEATURES: readonly ShellDetailsFeature[] = [
   'stateSubscription',
   'payloadRouting',
   'surfaceInstances',
   'conflictDetection',
 ]
+
+/**
+ * Why a surface instance left the active seat.
+ * `history-evicted` is reserved for P2 navigation.
+ */
+export type DetailsSurfaceCloseReason =
+  | 'user'
+  | 'replace'
+  | 'surface-unload'
+  | 'surface-crash'
+  | 'host-unload'
+  | 'session-close'
+  | 'history-evicted'
+
+/**
+ * Optional behavior metadata for a surface id. Renderable contributions remain
+ * on `shell.details.surface`; a descriptor without a slot contribution cannot
+ * open, while a slot contribution without a descriptor still opens.
+ */
+export interface DetailsSurfaceDescriptor<P = unknown> {
+  readonly id: string
+  /**
+   * Optional dedupe key factory. Stored in P1; navigation dedupe activates in P2.
+   * @param payload - open payload for this surface.
+   * @returns a stable key, or undefined to skip dedupe.
+   */
+  dedupeKey?: (payload: P) => string | undefined
+  /**
+   * Invoked when a new instance is committed.
+   * @param instance - committed instance.
+   */
+  onOpen?: (instance: DetailsSurfaceInstance<P>) => void
+  /**
+   * Invoked when an instance becomes the active details body.
+   * @param instance - activated instance.
+   */
+  onActivate?: (instance: DetailsSurfaceInstance<P>) => void
+  /**
+   * Invoked when an active instance leaves the seat before close.
+   * @param instance - deactivated instance.
+   */
+  onDeactivate?: (instance: DetailsSurfaceInstance<P>) => void
+  /**
+   * Invoked after deactivate when the instance is fully closed.
+   * @param instance - closed instance.
+   * @param reason - why the instance closed.
+   */
+  onClose?: (instance: DetailsSurfaceInstance<P>, reason: DetailsSurfaceCloseReason) => void
+}
 
 /**
  * One live details surface instance. Distinguishes surface type (`surfaceId`),
@@ -70,7 +133,7 @@ export interface ShellDetailsOpenRequest<P = unknown> {
   payload?: P
 }
 
-/** Owner props passed into `shell.details.surface` via `renderSlot`. */
+/** Owner props passed into details Host child slots via `renderSlot`. */
 export interface DetailsSurfaceOwnerProps {
   detailsInstance: DetailsSurfaceInstance
 }
@@ -87,12 +150,21 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
       scope: 'session'
       owner: DetailsSurfaceOwnerProps
     }
+    /**
+     * Host-header actions for the active surface. Filtered with `only` to the
+     * active surface id so inactive plugins do not render controls.
+     */
+    'shell.details.header.actions': {
+      kind: 'list'
+      scope: 'session'
+      owner: DetailsSurfaceOwnerProps
+    }
   }
 }
 
 /**
  * Public reactive snapshot of shell details state.
- * P0 keeps `canGoBack` false and `historyDepth` at 0.
+ * Navigation fields stay inert until P2 (`canGoBack` false, `historyDepth` 0).
  */
 export interface ShellDetailsSnapshot {
   readonly open: boolean
@@ -147,7 +219,7 @@ export interface ShellDetailsController {
   open<P = unknown>(request: ShellDetailsOpenRequest<P>): DetailsSurfaceInstance<P>
   /**
    * Close the details column, clear the active instance, and dispose takeover.
-   * Idempotent while already closed.
+   * Idempotent while already closed. Public closes use reason `user`.
    */
   close(): void
   /**
@@ -179,4 +251,10 @@ export interface ShellDetailsController {
    * @returns unsubscribe.
    */
   subscribe(listener: () => void): () => void
+  /**
+   * Register optional behavior metadata for a surface id.
+   * @param descriptor - lifecycle and future dedupe metadata.
+   * @returns disposer that removes the descriptor (HMR-safe).
+   */
+  registerSurface<P = unknown>(descriptor: DetailsSurfaceDescriptor<P>): () => void
 }
