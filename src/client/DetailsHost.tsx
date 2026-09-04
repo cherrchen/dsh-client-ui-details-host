@@ -4,7 +4,7 @@
  * `ctx.layout`; the global close button lives in the AppFrame header toggle,
  * not here — tabs close individually.
  */
-import { useCallback } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import type { KeyboardEvent } from 'react'
 import type { InjectFace, PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
@@ -90,6 +90,7 @@ export function DetailsHost({
   renderSlot,
   useDetailsHost,
   launcherEntries,
+  reportDockVisible,
   activate,
   closeTab,
   showLauncher,
@@ -99,6 +100,25 @@ export function DetailsHost({
   const { tabs, activeInstance, launcherVisible } = snapshot
   const launcherPage = launcherVisible || tabs.length === 0
   const activeId = activeInstance?.instanceId ?? null
+
+  // The dock keeps this subtree mounted while the layout closes the column
+  // (width 0), so the host measures its own box: this is the dock-visibility
+  // source for the header toggle and the launcher-on-reveal behavior. The
+  // callback rides a ref: the inject face identity changes every render.
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const reportRef = useRef(reportDockVisible)
+  reportRef.current = reportDockVisible
+  useEffect(() => {
+    const el = rootRef.current
+    if (el === null) return
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(entries => {
+      const width = entries[0]?.contentRect.width ?? 0
+      reportRef.current(width > 1)
+    })
+    observer.observe(el)
+    return () => { observer.disconnect() }
+  }, [])
 
   const onTablistKeyDown = useCallback((event: KeyboardEvent<HTMLDivElement>) => {
     if (tabs.length < 2) return
@@ -112,7 +132,7 @@ export function DetailsHost({
   }, [activate, activeId, tabs])
 
   return (
-    <div className={css.root} data-details-host="">
+    <div ref={rootRef} className={css.root} data-details-host="">
       {tabs.length > 0 && (
         <div className={css.tabbar} role="tablist" aria-label="Details tabs" onKeyDown={onTablistKeyDown}>
           {tabs.map((tab: DetailsSurfaceInstance) => (

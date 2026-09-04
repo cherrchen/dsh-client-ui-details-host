@@ -47,9 +47,49 @@ describe('shellDetails service', () => {
       label: null,
       tabs: [],
       launcherVisible: false,
+      dockVisible: false,
       canGoBack: false,
       historyDepth: 0,
     })
+    await b.fiber.dispose()
+  })
+
+  it('registers the header Details Toggle in the utilities cluster', async () => {
+    const b = await bench()
+    const entries = b.slots.entries('conversation.session.header.utilities')
+    expect(entries).toHaveLength(1)
+    expect(entries[0]!.options.id).toBe('dsh-electron.details-toggle')
+    await b.fiber.dispose()
+  })
+
+  it('reveals the launcher when the dock opens with no tabs', async () => {
+    const b = await bench()
+    contributeSurface(b.ctx, 'test.alpha', 'Alpha', DummyAlpha)
+    b.shellDetails.reportDockVisible(true)
+    expect(b.shellDetails.getSnapshot().launcherVisible).toBe(true)
+    expect(b.shellDetails.getSnapshot().dockVisible).toBe(true)
+    expect(winner(b.slots)).toBe(DetailsHost)
+    expect(b.layout.closeDetails).not.toHaveBeenCalled()
+
+    // Toggling the dock closed preserves the launcher and any tabs.
+    b.shellDetails.toggleDock()
+    expect(b.layout.closeDetails).toHaveBeenCalledTimes(1)
+    b.shellDetails.reportDockVisible(false)
+    expect(b.shellDetails.getSnapshot().dockVisible).toBe(false)
+    b.shellDetails.toggleDock()
+    expect(b.shellDetails.getSnapshot().launcherVisible).toBe(true)
+    expect(b.layout.openDetails).toHaveBeenCalled()
+    await b.fiber.dispose()
+  })
+
+  it('re-reveals retained tabs without the launcher on dock reopen', async () => {
+    const b = await bench()
+    contributeSurface(b.ctx, 'test.alpha', 'Alpha', DummyAlpha)
+    b.shellDetails.open('test.alpha')
+    b.shellDetails.reportDockVisible(false)
+    b.shellDetails.reportDockVisible(true)
+    expect(b.shellDetails.isOpen('test.alpha')).toBe(true)
+    expect(b.shellDetails.getSnapshot().launcherVisible).toBe(false)
     await b.fiber.dispose()
   })
 

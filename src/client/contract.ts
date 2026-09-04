@@ -11,6 +11,22 @@ export const DETAILS_SURFACE_SLOT = 'shell.details.surface' as const
 /** Slot key for per-surface Host header action contributions. */
 export const DETAILS_HEADER_ACTIONS_SLOT = 'shell.details.header.actions' as const
 
+/** Slot key of the session header utilities cluster (Session Log and peers). */
+export const CONVERSATION_HEADER_UTILITIES_SLOT = 'conversation.session.header.utilities' as const
+
+/** Fixed registrant identity of the Host-owned App Details Toggle entry. */
+export const DETAILS_TOGGLE_ENTRY_ID = 'dsh-electron.details-toggle' as const
+
+/**
+ * Chain rank of the Details Toggle inside the utilities cluster: ascending
+ * priority renders first, so `1` places the toggle after priority-0 entries
+ * (the Session Log action) — to its right.
+ */
+export const DETAILS_TOGGLE_PRIORITY = 1
+
+/** Locale namespace of the Details Toggle strings. */
+export const SHELL_DETAILS_LOCALE_NS = 'shell-details-toggle' as const
+
 /**
  * Fixed registrant identity for the DetailsHost `details` takeover entry.
  * The `details` slot is single-cell, so Host stamps this on `registrant`
@@ -226,8 +242,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 
 /**
  * Public reactive snapshot of shell details state for the current session.
- * v3: `tabs` and `launcherVisible` join the snapshot; `open` reports dock
- * content visibility (a tab active or the Launcher showing).
+ * v3: `tabs`, `launcherVisible`, and `dockVisible` join the snapshot; `open`
+ * reports dock content visibility (a tab active or the Launcher showing).
  */
 export interface ShellDetailsSnapshot {
   readonly open: boolean
@@ -238,6 +254,8 @@ export interface ShellDetailsSnapshot {
   readonly tabs: readonly DetailsSurfaceInstance[]
   /** Whether the Launcher page is showing (also implied by empty tabs). */
   readonly launcherVisible: boolean
+  /** Whether the dock column is physically revealed (measured when mounted). */
+  readonly dockVisible: boolean
   readonly canGoBack: boolean
   readonly historyDepth: number
 }
@@ -254,6 +272,12 @@ export interface DetailsHostState {
   readonly label: string | null
   /** Whether the Launcher page is showing (also implied by empty tabs). */
   readonly launcherVisible: boolean
+  /**
+   * Whether the dock column is physically revealed. Measured by the mounted
+   * DetailsHost (column width); false while the takeover is idle or the
+   * layout closed the column without destroying the tabs.
+   */
+  readonly dockVisible: boolean
   /** Whether {@link ShellDetailsController.back} can restore an MRU tab. */
   readonly canGoBack: boolean
 }
@@ -266,6 +290,8 @@ export interface DetailsHostInjected {
   }
   /** Live Launcher contributions, resolved at inject time. */
   launcherEntries: readonly DetailsLauncherContribution[]
+  /** Report the measured column visibility from the mounted DetailsHost. */
+  reportDockVisible(visible: boolean): void
   /** Activate the tab with this instance id (hides the Launcher). */
   activate(instanceId: string): void
   /** Close one tab (lifecycle `user`); recovers the MRU or neighbor tab. */
@@ -278,6 +304,20 @@ export interface DetailsHostInjected {
   close(): void
   /** Compatibility: activate the most recently active other tab. */
   back(): void
+}
+
+/**
+ * Injected face of the Host-owned header Details Toggle. It shares the
+ * DetailsHost observable (tab state plus measured `dockVisible`) and toggles
+ * the dock without ever destroying retained tabs.
+ */
+export interface DetailsToggleInjected {
+  hooks: {
+    /** Shared tab/dock snapshot bound by the renderer as `useDetailsToggle`. */
+    detailsToggle: HostObservable<DetailsHostState>
+  }
+  /** Toggle dock visibility; an empty dock reveals the Launcher. */
+  toggleDock(): void
 }
 
 /**

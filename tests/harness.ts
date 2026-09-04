@@ -155,11 +155,13 @@ export async function bench() {
   const layout = fakeLayout()
   const sessions = fakeSessions()
   ctx.provide('layout', layout)
+  ctx.provide('locale', { register: vi.fn(() => () => {}) })
   ctx.provide('sessions', sessions as never)
   const disposeRoot = slots.register({
     name: 'root',
     children: {
       details: { kind: 'single', scope: 'session' },
+      'conversation.session.header.utilities': { kind: 'list', scope: 'session' },
     },
   }, () => null)
   const disposeUpstream = slots.register({ name: 'details' }, UpstreamDetailsPanel)

@@ -5,22 +5,28 @@
 import { Service } from '@deepseek-ai/cordis'
 import type { Context } from '@deepseek-ai/cordis'
 import type { ISessions } from '@deepseek-ai/dsh-api-session-controller/client'
+import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { HostObservable, SlotLabel, StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import {
+  CONVERSATION_HEADER_UTILITIES_SLOT,
   DETAILS_HEADER_ACTIONS_SLOT,
   DETAILS_HOST_ENTRY_ID,
   DETAILS_HOST_PRIORITY,
   DETAILS_SURFACE_SLOT,
+  DETAILS_TOGGLE_ENTRY_ID,
+  DETAILS_TOGGLE_PRIORITY,
   SHELL_DETAILS_API_VERSION,
   SHELL_DETAILS_ENABLED_FEATURES,
+  SHELL_DETAILS_LOCALE_NS,
   type DetailsHostInjected,
   type DetailsHostState,
   type DetailsLauncherContribution,
   type DetailsSurfaceCloseReason,
   type DetailsSurfaceDescriptor,
   type DetailsSurfaceInstance,
+  type DetailsToggleInjected,
   type ShellDetailsController,
   type ShellDetailsFeature,
   type ShellDetailsOpenRequest,
@@ -53,12 +59,8 @@ import {
 } from './tabs.ts'
 import { DetailsSessionStore } from './session-state.ts'
 import { DetailsHost } from './DetailsHost.tsx'
-
-/** Minimal observable face the Host reads off `ctx.layout` (v3 ui-layout). */
-interface LayoutVisibilitySource {
-  getSnapshot(): { details: number }
-  subscribe(listener: () => void): () => void
-}
+import { DetailsToggle } from './DetailsToggle.tsx'
+import { en, NS, zh } from './locales.ts'
 
 /** Mutable snapshot source for DetailsHost inject and public subscribe. */
 class DetailsHostStateSource implements HostObservable<DetailsHostState> {
@@ -68,6 +70,7 @@ class DetailsHostStateSource implements HostObservable<DetailsHostState> {
     activeInstance: null,
     label: null,
     launcherVisible: false,
+    dockVisible: false,
     canGoBack: false,
   }
   readonly #listeners = new Set<() => void>()
@@ -106,6 +109,7 @@ class DetailsHostStateSource implements HostObservable<DetailsHostState> {
       && snapshot.activeId === prev.activeId
       && snapshot.label === prev.label
       && snapshot.launcherVisible === prev.launcherVisible
+      && snapshot.dockVisible === prev.dockVisible
       && snapshot.canGoBack === prev.canGoBack
       && snapshot.activeInstance?.instanceId === prev.activeInstance?.instanceId
       && snapshot.activeInstance?.payload === prev.activeInstance?.payload
@@ -129,7 +133,7 @@ function isOpenRequest(value: string | ShellDetailsOpenRequest): value is ShellD
 
 /** `ctx.shellDetails` implementation. */
 export class ShellDetailsService extends Service implements ShellDetailsController {
-  static inject = ['slots', 'layout', 'sessions']
+  static inject = ['slots', 'layout', 'sessions', 'locale']
 
   readonly apiVersion = SHELL_DETAILS_API_VERSION
   readonly features: ReadonlySet<ShellDetailsFeature> = new Set(SHELL_DETAILS_ENABLED_FEATURES)
@@ -140,7 +144,7 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
   private readonly launchers = new DetailsLauncherRegistry()
   private readonly sessions = new DetailsSessionStore()
   private takeover: (() => void) | undefined
-  private dockOpen = false
+  private dockVisible = false
 
   /**
    * @param ctx - owning plugin fiber. Takeover registrations ride this fiber
@@ -178,22 +182,71 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
       if (surfaceId === undefined) return
       this.recoverAfterSurfaceLoss(surfaceId, 'surface-crash')
     }), 'shellDetails: surface crash')
-    ctx.effect(() => {
-      const layout = this.owner.layout as unknown as Partial<LayoutVisibilitySource>
-      const getSnapshot = layout.getSnapshot
-      const subscribe = layout.subscribe
-      if (typeof getSnapshot !== 'function' || typeof subscribe !== 'function') {
-        return () => {}
-      }
-      this.dockOpen = getSnapshot.call(layout).details > 0
-      return subscribe.call(layout, () => {
-        const open = getSnapshot.call(layout).details > 0
-        const wasOpen = this.dockOpen
-        this.dockOpen = open
-        if (!open || wasOpen) return
-        this.onDockRevealed()
-      })
-    }, 'shellDetails: dock visibility')
+    ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'shellDetails: toggle locale')
+    this.registerHeaderToggle()
+  }
+
+  /**
+   * Header chrome: the App-level Details Toggle in the session header
+   * utilities cluster (right of the Session Log entry). Visibility state is
+   * the measured `dockVisible`; the toggle never destroys retained tabs.
+   */
+  private registerHeaderToggle(): void {
+    this.owner.effect(() => this.owner.slots.inject(CONVERSATION_HEADER_UTILITIES_SLOT, () =>
+      this.owner.slots.register({
+        name: CONVERSATION_HEADER_UTILITIES_SLOT,
+        id: DETAILS_TOGGLE_ENTRY_ID,
+        locale: SHELL_DETAILS_LOCALE_NS,
+        priority: DETAILS_TOGGLE_PRIORITY,
+        inject: (): DetailsToggleInjected => ({
+          hooks: { detailsToggle: this.state },
+          toggleDock: () => { this.toggleDock() },
+        }),
+      }, DetailsToggle)), 'shellDetails: header toggle')
+  }
+
+  /**
+   * Toggle dock visibility (header toggle entry point). Opening with no live
+   * tabs reveals the Launcher; opening with retained tabs re-reveals them.
+   * Closing only hides the column — tabs and launcher state survive.
+   */
+  toggleDock(): void {
+    if (this.dockVisible) {
+      this.owner.layout.closeDetails()
+      return
+    }
+    const session = this.sessions.get(this.currentSessionId())
+    if (session !== undefined && session.tabs.length > 0) {
+      this.owner.layout.openDetails()
+      return
+    }
+    this.showLauncher()
+  }
+
+  /**
+   * Report measured column visibility from the mounted DetailsHost. The
+   * false→true transition on an empty session reveals the Launcher.
+   * @param visible - whether the dock column currently has width.
+   */
+  reportDockVisible(visible: boolean): void {
+    const wasVisible = this.dockVisible
+    this.dockVisible = visible
+    if (visible && !wasVisible) {
+      this.onDockRevealed()
+      return
+    }
+    this.publishCurrent()
+  }
+
+  private onDockRevealed(): void {
+    const session = this.sessions.getOrCreate(this.currentSessionId())
+    if (session.tabs.length > 0 && session.activeInstanceId !== null) {
+      this.publishCurrent()
+      return
+    }
+    this.ensureTakeover()
+    session.launcherVisible = true
+    this.publishCurrent()
   }
 
   /**
@@ -225,6 +278,7 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
       label: published.label,
       tabs: published.tabs,
       launcherVisible: published.launcherVisible,
+      dockVisible: published.dockVisible,
       canGoBack: published.canGoBack,
       historyDepth,
     }
@@ -445,16 +499,6 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
     }
   }
 
-  private onDockRevealed(): void {
-    const session = this.sessions.getOrCreate(this.currentSessionId())
-    if (session.tabs.length > 0 && session.activeInstanceId !== null) {
-      return
-    }
-    this.ensureTakeover()
-    session.launcherVisible = true
-    this.publishSession(session)
-  }
-
   private onSessionSwitch(previous: string | undefined, next: string | undefined): void {
     if (previous !== undefined) {
       const prior = this.sessions.get(previous)
@@ -471,7 +515,7 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
     const active = session?.tabs.find(tab => tab.instanceId === session?.activeInstanceId)
     if (session === undefined || active === undefined) {
       this.publishIdle()
-      if (this.dockOpen) {
+      if (this.dockVisible) {
         const target = this.sessions.getOrCreate(next)
         target.launcherVisible = true
         this.ensureTakeover()
@@ -572,6 +616,7 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
         throw error
       }
     }
+    this.dockVisible = false
     const dispose = this.takeover
     this.takeover = undefined
     dispose?.()
@@ -589,6 +634,7 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
       inject: (): DetailsHostInjected => ({
         hooks: { detailsHost: this.state },
         launcherEntries: this.launchers.list(),
+        reportDockVisible: (visible: boolean) => { this.reportDockVisible(visible) },
         activate: (instanceId: string) => { this.activate(instanceId) },
         closeTab: (instanceId: string) => { this.closeTab(instanceId) },
         showLauncher: () => { this.showLauncher() },
@@ -614,6 +660,7 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
       activeInstance: active,
       label: active?.label ?? null,
       launcherVisible: session.launcherVisible,
+      dockVisible: this.dockVisible,
       canGoBack: sessionCanGoBack(session),
     })
   }
@@ -625,8 +672,19 @@ export class ShellDetailsService extends Service implements ShellDetailsControll
       activeInstance: null,
       label: null,
       launcherVisible: false,
+      dockVisible: this.dockVisible,
       canGoBack: false,
     })
+  }
+
+  /** Republish the current session state (dock visibility changes). */
+  private publishCurrent(): void {
+    const session = this.sessions.get(this.currentSessionId())
+    if (session === undefined) {
+      this.publishIdle()
+      return
+    }
+    this.publishSession(session)
   }
 
   private requireUniqueSurface(id: string): StoredEntry {

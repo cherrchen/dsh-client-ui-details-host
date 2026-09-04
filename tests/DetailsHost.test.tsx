@@ -2,16 +2,39 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DETAILS_HEADER_ACTIONS_SLOT, DETAILS_SURFACE_SLOT } from '../src/client/contract.ts'
 import type { DetailsLauncherContribution, DetailsSurfaceInstance } from '../src/client/contract.ts'
 import { DetailsHost } from '../src/client/DetailsHost.tsx'
 import type { DetailsHostProps } from '../src/client/DetailsHost.tsx'
 import type { DetailsHostState } from '../src/client/contract.ts'
 import { SurfaceErrorBoundary } from '../src/client/SurfaceErrorBoundary.tsx'
+import { DetailsToggle } from '../src/client/DetailsToggle.tsx'
 
 afterEach(() => {
   cleanup()
+})
+
+/** Minimal ResizeObserver stub: records observed elements, no callbacks. */
+class ResizeObserverStub {
+  static instances: ResizeObserverStub[] = []
+  observed: Element[] = []
+  constructor(callback: ResizeObserverCallback) {
+    void callback
+    ResizeObserverStub.instances.push(this)
+  }
+  observe(el: Element): void { this.observed.push(el) }
+  unobserve(): void {}
+  disconnect(): void {}
+}
+
+beforeEach(() => {
+  ResizeObserverStub.instances = []
+  vi.stubGlobal('ResizeObserver', ResizeObserverStub)
+})
+
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 const unused = (): never => {
@@ -36,6 +59,7 @@ function state(overrides: Partial<DetailsHostState> = {}): DetailsHostState {
     activeInstance: null,
     label: null,
     launcherVisible: false,
+    dockVisible: false,
     canGoBack: false,
     ...overrides,
   }
@@ -95,6 +119,7 @@ function props(
     },
     useDetailsHost: selector => selector(snapshot),
     launcherEntries: entries,
+    reportDockVisible: vi.fn(),
     activate: handlers.activate ?? vi.fn(),
     closeTab: handlers.closeTab ?? vi.fn(),
     showLauncher: handlers.showLauncher ?? vi.fn(),
@@ -221,6 +246,35 @@ describe('DetailsHost', () => {
     }), [], { throwing: true })} />)
     expect(container.querySelector('[data-details-surface-error]')).not.toBeNull()
     expect(container.textContent).toContain('test.alpha')
+  })
+})
+
+describe('DetailsToggle', () => {
+  function toggleProps(overrides: Partial<DetailsHostState> = {}): DetailsToggleProps {
+    return {
+      sessionId: 'session-a' as never,
+      useSession: unused,
+      useSessions: unused,
+      useWorkspaces: unused,
+      t: ((key: string) => `label:${key}`) as never,
+      useDetailsToggle: selector => selector(state(overrides)),
+      toggleDock: vi.fn(),
+    }
+  }
+
+  it('renders pressed with the measured dock visibility', () => {
+    render(<DetailsToggle {...toggleProps({ dockVisible: true })} />)
+    const button = screen.getByRole('button', { name: 'label:toggle.label' })
+    expect(button.getAttribute('aria-pressed')).toBe('true')
+  })
+
+  it('renders unpressed while the dock is hidden and toggles on click', () => {
+    const toggleDock = vi.fn()
+    render(<DetailsToggle {...toggleProps({ dockVisible: false, tabs: [], activeId: null })} toggleDock={toggleDock} />)
+    const button = screen.getByRole('button', { name: 'label:toggle.label' })
+    expect(button.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(button)
+    expect(toggleDock).toHaveBeenCalledTimes(1)
   })
 })
 
