@@ -15,13 +15,15 @@ export {
   SHELL_DETAILS_ENABLED_FEATURES,
   SHELL_DETAILS_P0_FEATURES,
 } from './contract.ts'
-export { DETAILS_HISTORY_LIMIT } from './session-state.ts'
+export { DETAILS_TAB_LIMIT } from './session-state.ts'
 export type {
   DetailsHostInjected,
   DetailsHostState,
   DetailsSurfaceCloseReason,
   DetailsSurfaceDescriptor,
   DetailsSurfaceInstance,
+  DetailsIcon,
+  DetailsLauncherContribution,
   DetailsSurfaceOwnerProps,
   ShellDetailsController,
   ShellDetailsFeature,
@@ -29,6 +31,7 @@ export type {
   ShellDetailsSnapshot,
 } from './contract.ts'
 export type { DetailsSessionState } from './session-state.ts'
+export { DetailsLauncherRegistry } from './launcher.ts'
 export {
   DetailsSurfaceDuplicateError,
   DetailsSurfaceNotFoundError,
