@@ -105,10 +105,10 @@ ctx.shellDetails.registerLauncher({
   id: 'example.card',
   pluginId: 'example',
   title: 'Example',
-  icon: <Glyph />,             // 可选 ReactNode
-  description: 'Open Example', // 可选
-  order: 10,                   // 可选，升序
-  when: () => true,            // 可选可见性谓词
+  icon: <Glyph />,            // optional ReactNode
+  description: 'Open Example', // optional
+  order: 10,                   // optional, ascending
+  when: () => true,            // optional visibility predicate
   open: () => ({ surfaceId: 'example.alpha' }),
 })
 ```
