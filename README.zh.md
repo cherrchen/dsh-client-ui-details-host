@@ -105,7 +105,7 @@ surface descriptor 可以声明 `dedupeKey(payload)`（标签页复用身份）�
 ```tsx
 import { DetailsHeaderAction } from '@dsh-electron/dsh-client-ui-details-host/client'
 
-<DetailsHeaderAction icon={<IconRefreshOutline16 />} label="刷新 Git 状态" onTrigger={refresh} />
+<DetailsHeaderAction icon={<IconRefreshOutline16 />} label={refreshLabel} onTrigger={refresh} />
 ```
 
 `label` 同时是 tooltip 文案与按钮 `aria-label` 的唯一来源，不会作为可见文本渲染在按钮上。

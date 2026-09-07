@@ -105,7 +105,7 @@ The deprecated compatibility slot accepts existing controls at `shell.details.he
 ```tsx
 import { DetailsHeaderAction } from '@dsh-electron/dsh-client-ui-details-host/client'
 
-<DetailsHeaderAction icon={<IconRefreshOutline16 />} label="Refresh Git status" onTrigger={refresh} />
+<DetailsHeaderAction icon={<IconRefreshOutline16 />} label={refreshLabel} onTrigger={refresh} />
 ```
 
 `label` is the single source for both the tooltip text and the button's `aria-label`; it is never rendered as visible button text.
