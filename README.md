@@ -2,6 +2,9 @@
 
 English | [中文](README.zh.md)
 
+> [!IMPORTANT]
+> **This project is no longer maintained.** DeepSeek Harness now provides an official sidebar and has removed the Details page that this plugin was designed to extend. As a result, Details Host is no longer needed and will not receive further updates. This repository will be archived in the coming days and remains available only as a historical reference.
+
 Portable DSH/Cordis Client plugin that hosts one active details surface in the AppFrame details column. The package is `platform:web` UI infrastructure with no Electron, Node, or Desktop dependency. The npm scope `@dsh-electron/` identifies the publisher, not a runtime requirement.
 
 This repository is the canonical source. [DeepSeek Harness Desktop](https://github.com/cherrchen/deepseek-harness-electron) mirrors it with git subtree and mounts Details Host as required built-in infrastructure. The same package runs unchanged in DeepSeek Harness Desktop and in a standard DSH Web host.

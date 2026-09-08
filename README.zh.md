@@ -2,6 +2,9 @@
 
 [English](README.md) | 中文
 
+> [!IMPORTANT]
+> **本项目已停止维护。** DeepSeek Harness 官方现已提供 sidebar 功能，并移除了本插件原本用于扩展的 Details 页面，因此 Details Host 已无继续存在的必要，后续将不再更新。本仓库将在未来几天内归档，此后仅作为历史参考保留。
+
 可移植 DSH/Cordis Client 插件，在 AppFrame 详情栏中承载一个活动详情 surface。该包是 `platform:web` UI 基础设施，不依赖 Electron、Node 或 Desktop。npm scope `@dsh-electron/` 标识发布者，不是运行时要求。
 
 本仓库是源码真源。[DeepSeek Harness Desktop](https://github.com/cherrchen/deepseek-harness-electron) 通过 git subtree 镜像它，并将 Details Host 作为必需内置基础设施挂载。同一 package 可在 DeepSeek Harness Desktop 与标准 DSH Web host 中原样运行。
